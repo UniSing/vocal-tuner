@@ -1,0 +1,159 @@
+
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Accordeur Vocal</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: sans-serif;
+      background-color: #ffffff;
+      color: #592169;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      text-align: center;
+    }
+    h1 {
+      font-size: 2rem;
+      margin-bottom: 1rem;
+    }
+    .note {
+      font-size: 4rem;
+      font-weight: bold;
+      margin: 0.5rem 0;
+    }
+    .freq {
+      font-size: 1.5rem;
+      color: #89CCD8;
+    }
+    .indicator {
+      width: 80%;
+      height: 10px;
+      background-color: #ccc;
+      margin-top: 2rem;
+      position: relative;
+      border-radius: 5px;
+    }
+    .needle {
+      position: absolute;
+      top: -5px;
+      width: 10px;
+      height: 20px;
+      background-color: #592169;
+      border-radius: 2px;
+      transition: left 0.1s ease-out;
+    }
+  </style>
+</head>
+<body>
+  <h1>Accordeur vocal</h1>
+  <div class="note">–</div>
+  <div class="freq">– Hz</div>
+  <div class="indicator">
+    <div class="needle" id="needle"></div>
+  </div>
+
+  <script>
+    const noteDisplay = document.querySelector('.note');
+    const freqDisplay = document.querySelector('.freq');
+    const needle = document.getElementById('needle');
+
+    const noteStrings = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+
+    function noteFromFrequency(freq) {
+      const A4 = 440;
+      const semitone = 69 + 12 * Math.log2(freq / A4);
+      return Math.round(semitone);
+    }
+
+    function frequencyToNote(freq) {
+      const noteNumber = noteFromFrequency(freq);
+      const noteIndex = noteNumber % 12;
+      const octave = Math.floor(noteNumber / 12) - 1;
+      return noteStrings[noteIndex] + octave;
+    }
+
+    function updateNeedle(freq, noteFreq) {
+      const diff = freq - noteFreq;
+      const cents = 1200 * Math.log2(freq / noteFreq);
+      const maxCents = 50;
+      const percentage = Math.max(-1, Math.min(1, cents / maxCents));
+      const needlePos = 50 + percentage * 50;
+      needle.style.left = `${needlePos}%`;
+    }
+
+    async function startTuner() {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const audioContext = new AudioContext();
+      const source = audioContext.createMediaStreamSource(stream);
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 2048;
+      source.connect(analyser);
+      const buffer = new Float32Array(analyser.fftSize);
+
+      function autoCorrelate(buf, sampleRate) {
+        let SIZE = buf.length;
+        let rms = 0;
+        for (let i = 0; i < SIZE; i++) rms += buf[i] * buf[i];
+        rms = Math.sqrt(rms / SIZE);
+        if (rms < 0.01) return -1;
+
+        let r1 = 0, r2 = SIZE - 1, thres = 0.2;
+        for (let i = 0; i < SIZE / 2; i++) {
+          if (Math.abs(buf[i]) < thres) { r1 = i; break; }
+        }
+        for (let i = 1; i < SIZE / 2; i++) {
+          if (Math.abs(buf[SIZE - i]) < thres) { r2 = SIZE - i; break; }
+        }
+
+        buf = buf.slice(r1, r2);
+        SIZE = buf.length;
+
+        let c = new Array(SIZE).fill(0);
+        for (let i = 0; i < SIZE; i++)
+          for (let j = 0; j < SIZE - i; j++)
+            c[i] = c[i] + buf[j] * buf[j + i];
+
+        let d = 0;
+        while (c[d] > c[d + 1]) d++;
+        let maxval = -1, maxpos = -1;
+        for (let i = d; i < SIZE; i++) {
+          if (c[i] > maxval) {
+            maxval = c[i];
+            maxpos = i;
+          }
+        }
+
+        let T0 = maxpos;
+        return sampleRate / T0;
+      }
+
+      function detect() {
+        analyser.getFloatTimeDomainData(buffer);
+        const freq = autoCorrelate(buffer, audioContext.sampleRate);
+        if (freq > 0) {
+          const noteName = frequencyToNote(freq);
+          noteDisplay.textContent = noteName;
+          freqDisplay.textContent = freq.toFixed(1) + ' Hz';
+          const midi = noteFromFrequency(freq);
+          const targetFreq = 440 * Math.pow(2, (midi - 69) / 12);
+          updateNeedle(freq, targetFreq);
+        } else {
+          noteDisplay.textContent = '–';
+          freqDisplay.textContent = '– Hz';
+        }
+        requestAnimationFrame(detect);
+      }
+
+      detect();
+    }
+
+    startTuner();
+  </script>
+</body>
+</html>
