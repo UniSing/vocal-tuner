@@ -1,0 +1,194 @@
+
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Accordeur avec Portée</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: sans-serif;
+      background-color: #ffffff;
+      color: #592169;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 1rem;
+      text-align: center;
+    }
+    .note-display {
+      font-size: 1.5rem;
+      margin: 1rem;
+    }
+    .indicator {
+      width: 80%;
+      height: 10px;
+      background-color: #ccc;
+      position: relative;
+      border-radius: 5px;
+      margin-bottom: 1rem;
+    }
+    .needle {
+      position: absolute;
+      top: -5px;
+      width: 10px;
+      height: 20px;
+      background-color: #592169;
+      border-radius: 2px;
+      transition: left 0.1s ease-out;
+    }
+    svg {
+      width: 300px;
+      height: 120px;
+      margin-top: 1rem;
+    }
+    #clef-toggle {
+      margin-bottom: 1rem;
+      background: #89CCD8;
+      border: none;
+      padding: 0.5rem 1rem;
+      border-radius: 5px;
+      color: #fff;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <button id="clef-toggle">🎼 Changer de clé</button>
+  <div class="note-display" id="note-name">–</div>
+  <div class="indicator"><div class="needle" id="needle"></div></div>
+  <svg id="staff" viewBox="0 0 300 100">
+    <g id="lines" stroke="#000" stroke-width="1">
+      <line x1="10" x2="290" y1="20" y2="20"/>
+      <line x1="10" x2="290" y1="35" y2="35"/>
+      <line x1="10" x2="290" y1="50" y2="50"/>
+      <line x1="10" x2="290" y1="65" y2="65"/>
+      <line x1="10" x2="290" y1="80" y2="80"/>
+    </g>
+    <text id="clef" x="15" y="60" font-size="48" fill="#592169">𝄞</text>
+    <circle id="notehead" cx="150" cy="50" r="6" fill="#592169" visibility="hidden"/>
+    <text id="accidental" x="135" y="55" font-size="18" fill="#592169" visibility="hidden">♯</text>
+  </svg>
+
+  <script>
+    const noteNames = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+    const noteOffsetsTreble = {
+      "C4": 80, "C#4": 80, "D4": 77, "D#4": 77, "E4": 74, "F4": 71, "F#4": 71, "G4": 68,
+      "G#4": 68, "A4": 65, "A#4": 65, "B4": 62, "C5": 59, "C#5": 59, "D5": 56, "D#5": 56,
+      "E5": 53, "F5": 50, "F#5": 50, "G5": 47, "G#5": 47, "A5": 44
+    };
+    const noteOffsetsBass = {
+      "C2": 80, "C#2": 80, "D2": 77, "D#2": 77, "E2": 74, "F2": 71, "F#2": 71, "G2": 68,
+      "G#2": 68, "A2": 65, "A#2": 65, "B2": 62, "C3": 59, "C#3": 59, "D3": 56, "D#3": 56,
+      "E3": 53, "F3": 50, "F#3": 50, "G3": 47, "G#3": 47, "A3": 44, "B3": 41, "C4": 38
+    };
+
+    let clef = "treble";
+
+    document.getElementById("clef-toggle").onclick = () => {
+      clef = clef === "treble" ? "bass" : "treble";
+      document.getElementById("clef").textContent = clef === "treble" ? "𝄞" : "𝄢";
+    };
+
+    function noteFromFrequency(freq) {
+      const A4 = 440;
+      const semitone = 69 + 12 * Math.log2(freq / A4);
+      return Math.round(semitone);
+    }
+
+    function getNoteData(freq) {
+      const midi = noteFromFrequency(freq);
+      const note = noteNames[midi % 12];
+      const octave = Math.floor(midi / 12) - 1;
+      return {
+        name: note + octave,
+        base: note.replace("#", ""),
+        sharp: note.includes("#"),
+        midi,
+        freq
+      };
+    }
+
+    function updateNeedle(freq, midi) {
+      const target = 440 * Math.pow(2, (midi - 69) / 12);
+      const cents = 1200 * Math.log2(freq / target);
+      const percent = Math.max(-1, Math.min(1, cents / 50));
+      document.getElementById("needle").style.left = `${50 + percent * 50}%`;
+    }
+
+    function updateStaff(noteData) {
+      const key = noteData.name;
+      const offsets = clef === "treble" ? noteOffsetsTreble : noteOffsetsBass;
+      const y = offsets[key];
+      const notehead = document.getElementById("notehead");
+      const accidental = document.getElementById("accidental");
+
+      if (y !== undefined) {
+        notehead.setAttribute("cy", y);
+        notehead.setAttribute("visibility", "visible");
+        accidental.setAttribute("y", y + 5);
+        accidental.setAttribute("visibility", noteData.sharp ? "visible" : "hidden");
+      } else {
+        notehead.setAttribute("visibility", "hidden");
+        accidental.setAttribute("visibility", "hidden");
+      }
+    }
+
+    async function startTuner() {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const ctx = new AudioContext();
+      const source = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 2048;
+      source.connect(analyser);
+      const buffer = new Float32Array(analyser.fftSize);
+
+      function autoCorrelate(buf, sampleRate) {
+        let SIZE = buf.length, rms = 0;
+        for (let i = 0; i < SIZE; i++) rms += buf[i] * buf[i];
+        rms = Math.sqrt(rms / SIZE);
+        if (rms < 0.01) return -1;
+
+        let r1 = 0, r2 = SIZE - 1, thres = 0.2;
+        while (r1 < SIZE / 2 && Math.abs(buf[r1]) < thres) r1++;
+        while (r2 > SIZE / 2 && Math.abs(buf[r2]) < thres) r2--;
+        buf = buf.slice(r1, r2);
+        SIZE = buf.length;
+
+        let c = Array(SIZE).fill(0);
+        for (let i = 0; i < SIZE; i++)
+          for (let j = 0; j < SIZE - i; j++)
+            c[i] += buf[j] * buf[j + i];
+
+        let d = 0; while (c[d] > c[d + 1]) d++;
+        let maxval = -1, maxpos = -1;
+        for (let i = d; i < SIZE; i++) {
+          if (c[i] > maxval) { maxval = c[i]; maxpos = i; }
+        }
+
+        let T0 = maxpos;
+        return sampleRate / T0;
+      }
+
+      function detect() {
+        analyser.getFloatTimeDomainData(buffer);
+        const freq = autoCorrelate(buffer, ctx.sampleRate);
+        if (freq > 0) {
+          const data = getNoteData(freq);
+          document.getElementById("note-name").textContent = data.name + " (" + freq.toFixed(1) + " Hz)";
+          updateNeedle(freq, data.midi);
+          updateStaff(data);
+        } else {
+          document.getElementById("note-name").textContent = "–";
+        }
+        requestAnimationFrame(detect);
+      }
+
+      detect();
+    }
+
+    startTuner();
+  </script>
+</body>
+</html>
